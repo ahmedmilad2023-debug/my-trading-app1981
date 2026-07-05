@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>مستشار التداول الخوارزمي - فيوتشر الكريبتو</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.js">
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;direction:rtl;font-family:'Segoe UI',Tahoma,sans-serif;}
+body{background:#0b0e14;color:#e0e6ed;padding:16px;min-height:100vh;}
+#app{max-width:1400px;margin:0 auto;}
+h1{font-size:22px;font-weight:600;margin-bottom:12px;color:#f0b90b;letter-spacing:0.5px;border-right:4px solid #f0b90b;padding-right:12px;}
+.sub{font-size:13px;color:#8892a0;margin-bottom:20px;}
+#chart-container{background:#131a24;border-radius:12px;padding:8px;border:1px solid #2a3340;height:480px;position:relative;}
+#chart-container .loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#8892a0;font-size:14px;}
+#signals-area{margin-top:24px;}
+#signals-area h2{font-size:18px;font-weight:500;margin-bottom:14px;color:#c8d0dc;}
+#signals-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;}
+.signal-card{background:#141d2b;border-radius:10px;padding:16px 18px;border-right:4px solid #f0b90b;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:0.2s;border-left:1px solid #25303e;border-top:1px solid #25303e;border-bottom:1px solid #25303e;}
+.signal-card.buy{border-right-color:#00c897;}
+.signal-card.sell{border-right-color:#f6465d;}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+.signal-type{font-weight:700;font-size:18px;display:flex;align-items:center;gap:6px;}
+.signal-type .badge{font-size:12px;background:#1e293b;padding:2px 10px;border-radius:20px;color:#b0c0d0;}
+.signal-time{font-size:12px;color:#6b7b8f;direction:ltr;text-align:left;}
+.card-details{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:10px 0 8px;font-size:14px;}
+.card-details span{background:#0f1724;padding:4px 8px;border-radius:6px;color:#bcc8d8;}
+.card-details .label{color:#6a7b8e;font-size:11px;display:block;}
+.card-analysis{font-size:13px;color:#b0c4d8;background:#0f1724;padding:8px 10px;border-radius:6px;margin-top:6px;line-height:1.6;border-right:2px solid #2a3a4a;}
+.no-signals{color:#5a6a7a;padding:30px;text-align:center;background:#101a24;border-radius:10px;border:1px dashed #2a3a4a;}
+#status-bar{display:flex;flex-wrap:wrap;gap:12px 20px;margin:12px 0 18px;padding:8px 14px;background:#101a24;border-radius:8px;font-size:13px;border:1px solid #1f2a36;}
+#status-bar .stat{display:flex;align-items:center;gap:6px;}
+#status-bar .stat .val{color:#f0b90b;font-weight:600;}
+#status-bar .stat .val.on{color:#00c897;}
+#status-bar .stat .val.off{color:#f6465d;}
+.control-btn{background:#1f2a36;border:none;color:#c8d0dc;padding:4px 14px;border-radius:6px;cursor:pointer;font-size:12px;transition:0.2s;}
+.control-btn:hover{background:#2a3a4a;}
+</style>
+</head>
+<body>
+<div id="app">
+<h1>⚡ مستشار التداول الخوارزمي</h1>
+<div class="sub">استراتيجية متعددة المؤشرات | زوج BTC/USDT | إطار 1 ساعة</div>
+<div id="status-bar">
+<div class="stat">📡 الحالة: <span id="ws-status" class="val on">متصل</span></div>
+<div class="stat">🕒 آخر تحديث: <span id="last-update" class="val">--</span></div>
+<div class="stat">📊 عدد الشموع: <span id="candle-count" class="val">0</span></div>
+<div class="stat">🔔 الإشارات: <span id="signal-count" class="val">0</span></div>
+<div class="stat"><button id="reset-btn" class="control-btn">↻ إعادة تحميل البيانات</button></div>
+</div>
+<div id="chart-container">
+<div id="chart" style="width:100%;height:100%;"></div>
+<div id="loading-msg" class="loading">⏳ جاري تحميل البيانات التاريخية...</div>
+</div>
+<div id="signals-area">
+<h2>📋 سجل الإشارات <span style="font-size:14px;font-weight:400;color:#6a7b8e;">(تظهر الإشارات الجديدة تلقائياً)</span></h2>
+<div id="signals-grid"></div>
+<div id="no-signals" class="no-signals">⏳ في انتظار إشارة الدخول الأولى...</div>
+</div>
+</div>
+<script>
+// ===================== الكود الأساسي =====================
+// جميع الأسطر تبدأ من بداية السطر (بدون مسافات بادئة) وفقاً للشرط الإلزامي
+// ========================================================
+var CHART=null;
+var SERIES=null;
+var CANDLES=[];
+var SIGNALS=[];
+var LAST_SIGNAL_TIME=0;
+var WS=null;
+var IS_WEBSOCKET=true;
+var SYMBOL='BTCUSDT';
+var INTERVAL='1h';
+var LIMIT=200;
+var EMA_FAST=9;
+var EMA_SLOW=21;
+var RSI_PERIOD=14;
+var MACD_FAST=12;
+var MACD_SLOW=26;
+var MACD_SIGNAL=9;
+var ATR_PERIOD=14;
+var MIN_SIGNAL_GAP=3600000;
+var BUY_THRESHOLD=30;
+var SELL_THRESHOLD=70;
+var CHART_READY=false;
+var LOADING_EL=document.getElementById('loading-msg');
+var SIGNALS_GRID=document.getElementById('signals-grid');
+var NO_SIGNALS_EL=document.getElementById('no-signals');
+var WS_STATUS=document.getElementById('ws-status');
+var LAST_UPDATE=document.getElementById('last-update');
+var CANDLE_COUNT=document.getElementById('candle-count');
+var SIGNAL_COUNT=document.getElementById('signal-count');
+var RESET_BTN=document.getElementById('reset-btn');
+function initChart(){
+var container=document.getElementById('chart');
+CHART=LightweightCharts.createChart(container,{
+width:container.clientWidth,
+height:container.clientHeight,
+layout:{background:{color:'#131a24'},textColor:'#a0b0c0'},
+grid:{vertLines:{color:'#1e2a36'},horzLines:{color:'#1e2a36'}},
+timeScale:{timeVisible:true,secondsVisible:false,borderColor:'#2a3a4a'},
+rightPriceScale:{borderColor:'#2a3a4a'},
+crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+});
+SERIES=CHART.addCandlestickSeries({
+upColor:'#00c897',downColor:'#f6465d',wickUpColor:'#00c897',wickDownColor:'#f6465d',borderVisible:false,
+});
+if(LOADING_EL)LOADING_EL.style.display='none';
+CHART_READY=true;
+}
+function formatTime(ts){
+var d=new Date(ts);
+var pad=function(n){return n<10?'0'+n:n;};
+return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+function getRsi(data,period){
+if(data.length<period+1)return 50;
+var gains=0,losses=0;
+for(var i=1;i<=period;i++){
+var diff=data[data.length-i]-data[data.length-i-1];
+if(diff>=0)gains+=diff;else losses-=diff;
+}
+var avgG=gains/period;
+var avgL=losses/period;
+if(avgL===0)return 100;
+var rs=avgG/avgL;
+var rsi=100-(100/(1+rs));
+for(var j=period+1;j<data.length;j++){
+var diff2=data[j]-data[j-1];
+var g=diff2>=0?diff2:0;
+var l=diff2<0?-diff2:0;
+avgG=(avgG*(period-1)+g)/period;
+avgL=(avgL*(period-1)+l)/period;
+if(avgL===0)return 100;
+rs=avgG/avgL;
+rsi=100-(100/(1+rs));
+}
+return rsi;
+}
+function getEma(data,period){
+var result=[];
+var multiplier=2/(period+1);
+var ema=data[0];
+result.push(ema);
+for(var i=1;i<data.length;i++){
+ema=(data[i]-ema)*multiplier+ema;
+result.push(ema);
+}
+return result;
+}
+function getMacd(close,fast,slow,signal){
+var emaFast=getEma(close,fast);
+var emaSlow=getEma(close,slow);
+var macdLine=[];
+for(var i=0;i<close.length;i++){
+macdLine.push(emaFast[i]-emaSlow[i]);
+}
+var signalLine=getEma(macdLine,signal);
+var histogram=[];
+for(var j=0;j<macdLine.length;j++){
+histogram.push(macdLine[j]-signalLine[j]);
+}
+return {macd:macdLine,signal:signalLine,histogram:histogram};
+}
+function getAtr(high,low,close,period){
+var tr=[];
+for(var i=1;i<high.length;i++){
+var h=high[i];
+var l=low[i];
+var pc=close[i-1];
+var tr1=h-l;
+var tr2=Math.abs(h-pc);
+var tr3=Math.abs(l-pc);
+tr.push(Math.max(tr1,tr2,tr3));
+}
+var atr=[];
+var sum=0;
+for(var j=0;j<period && j<tr.length;j++){sum+=tr[j];}
+if(tr.length>=period){
+atr.push(sum/period);
+for(var k=period;k<tr.length;k++){
+var val=(atr[atr.length-1]*(period-1)+tr[k])/period;
+atr.push(val);
+}
+}
+return atr;
+}
+function detectEngulfing(opens,closes,index){
+if(index<1)return null;
+var prevOpen=opens[index-1],prevClose=closes[index-1];
+var curOpen=opens[index],curClose=closes[index];
+if(prevClose>prevOpen && curClose<curOpen && curOpen<prevClose && curClose<prevOpen){
+return 'bearish';
+}
+if(prevClose<prevOpen && curClose>curOpen && curOpen>prevClose && curClose>prevOpen){
+return 'bullish';
+}
+return null;
+}
+function generateSignal(candles){
+if(candles.length<50)return null;
+var len=candles.length;
+var opens=[],highs=[],lows=[],closes=[];
+for(var i=0;i<len;i++){
+opens.push(candles[i].open);
+highs.push(candles[i].high);
+lows.push(candles[i].low);
+closes.push(candles[i].close);
+}
+var rsi=getRsi(closes,RSI_PERIOD);
+var emaFast=getEma(closes,EMA_FAST);
+var emaSlow=getEma(closes,EMA_SLOW);
+var macdData=getMacd(closes,MACD_FAST,MACD_SLOW,MACD_SIGNAL);
+var atrArr=getAtr(highs,lows,closes,ATR_PERIOD);
+var lastAtr=atrArr.length>0?atrArr[atrArr.length-1]:closes[len-1]*0.01;
+var idx=len-1;
+var curClose=closes[idx];
+var curOpen=opens[idx];
+var prevClose=closes[idx-1];
+var prevOpen=opens[idx-1];
+var engulf=detectEngulfing(opens,closes,idx);
+var ema9=emaFast[idx];
+var ema21=emaSlow[idx];
+var macdLine=macdData.macd[idx];
+var macdSig=macdData.signal[idx];
+var macdHist=macdData.histogram[idx];
+var prevMacdLine=macdData.macd[idx-1];
+var prevMacdSig=macdData.signal[idx-1];
+var macdCrossUp=(prevMacdLine<=prevMacdSig && macdLine>macdSig);
+var macdCrossDown=(prevMacdLine>=prevMacdSig && macdLine<macdSig);
+var isBullishEngulf=(engulf==='bullish');
+var isBearishEngulf=(engulf==='bearish');
+var rsiLow=rsi<BUY_THRESHOLD;
+var rsiHigh=rsi>SELL_THRESHOLD;
+var emaBull=ema9>ema21;
+var emaBear=ema9<ema21;
+var buySignal=false;
+var sellSignal=false;
+var reasons=[];
+if(rsiLow && emaBull && macdCrossUp){
+buySignal=true;
+reasons.push('مؤشر RSI في منطقة تشبع بيعي ('+rsi.toFixed(1)+')');
+reasons.push('تقاطع إيجابي لـ EMA9 فوق EMA21');
+reasons.push('تقاطع صاعد لـ MACD (خط MACD فوق خط الإشارة)');
+if(isBullishEngulf){reasons.push('شمعة ابتلاع صاعدة تؤكد الانعكاس');}
+}else if(rsiHigh && emaBear && macdCrossDown){
+sellSignal=true;
+reasons.push('مؤشر RSI في منطقة تشبع شرائي ('+rsi.toFixed(1)+')');
+reasons.push('تقاطع سلبي لـ EMA9 تحت EMA21');
+reasons.push('تقاطع هابط لـ MACD (خط MACD تحت خط الإشارة)');
+if(isBearishEngulf){reasons.push('شمعة ابتلاع هابطة تؤكد الانعكاس');}
+}
+if(!buySignal && !sellSignal){
+if(rsiLow && emaBull && !macdCrossUp){
+buySignal=true;
+reasons.push('RSI في منطقة تشبع بيعي ('+rsi.toFixed(1)+')');
+reasons.push('اتجاه صاعد للمتوسطات (EMA9 > EMA21)');
+reasons.push('انتظار تقاطع MACD قريباً');
+}
+else if(rsiHigh && emaBear && !macdCrossDown){
+sellSignal=true;
+reasons.push('RSI في منطقة تشبع شرائي ('+rsi.toFixed(1)+')');
+reasons.push('اتجاه هابط للمتوسطات (EMA9 < EMA21)');
+reasons.push('انتظار تقاطع MACD هابط');
+}
+}
+if(!buySignal && !sellSignal){
+if(isBullishEngulf && rsi<50 && emaBull){
+buySignal=true;
+reasons.push('نمط شمعة ابتلاع صاعد');
+reasons.push('RSI محايد-منخفض ('+rsi.toFixed(1)+')');
+reasons.push('المتوسطات في ترتيب صاعد');
+}
+else if(isBearishEngulf && rsi>50 && emaBear){
+sellSignal=true;
+reasons.push('نمط شمعة ابتلاع هابط');
+reasons.push('RSI محايد-مرتفع ('+rsi.toFixed(1)+')');
+reasons.push('المتوسطات في ترتيب هابط');
+}
+}
+if(!buySignal && !sellSignal)return null;
+var action=buySignal?'BUY':'SELL';
+var entry=curClose;
+var sl=0;
+var tp=0;
+var atrFactor=2.0;
+if(action==='BUY'){
+sl=entry - lastAtr*atrFactor;
+tp=entry + lastAtr*2.5;
+if(sl<0)sl=entry*0.97;
+if(tp<entry)tp=entry*1.05;
+}else{
+sl=entry + lastAtr*atrFactor;
+tp=entry - lastAtr*2.5;
+if(tp>entry)tp=entry*0.95;
+}
+var now=Date.now();
+if(now - LAST_SIGNAL_TIME < MIN_SIGNAL_GAP){
+return null;
+}
+LAST_SIGNAL_TIME=now;
+var analysis='';
+if(action==='BUY'){
+analysis='🟢 إشارة شراء: '+reasons.join('، ') + '. تم تحديد وقف الخسارة عند '+sl.toFixed(2)+' وهدف الربح عند '+tp.toFixed(2)+' بناءً على ATR ('+lastAtr.toFixed(2)+').';
+}else{
+analysis='🔴 إشارة بيع: '+reasons.join('، ') + '. تم تحديد وقف الخسارة عند '+sl.toFixed(2)+' وهدف الربح عند '+tp.toFixed(2)+' بناءً على ATR ('+lastAtr.toFixed(2)+').';
+}
+return {
+action:action,
+entry:entry,
+sl:sl,
+tp:tp,
+time:now,
+analysis:analysis,
+rsi:rsi,
+ema9:ema9,
+ema21:ema21,
+macd:macdLine,
+macdSignal:macdSig,
+engulf:engulf
+};
+}
+function addSignalToUI(signal){
+var card=document.createElement('div');
+card.className='signal-card '+(signal.action==='BUY'?'buy':'sell');
+var dt=formatTime(signal.time);
+var actionLabel=signal.action==='BUY'?'شراء 🟢':'بيع 🔴';
+card.innerHTML=
+'<div class="card-header">'+
+'<div class="signal-type">'+actionLabel+' <span class="badge">#'+(SIGNALS.length+1)+'</span></div>'+
+'<div class="signal-time">'+dt+'</div>'+
+'</div>'+
+'<div class="card-details">'+
+'<span><span class="label">سعر الدخول</span>'+signal.entry.toFixed(2)+'</span>'+
+'<span><span class="label">هدف الربح</span>'+signal.tp.toFixed(2)+'</span>'+
+'<span><span class="label">وقف الخسارة</span>'+signal.sl.toFixed(2)+'</span>'+
+'</div>'+
+'<div class="card-analysis">📊 '+signal.analysis+'</div>';
+if(NO_SIGNALS_EL)NO_SIGNALS_EL.style.display='none';
+SIGNALS_GRID.prepend(card);
+SIGNALS.push(signal);
+SIGNAL_COUNT.textContent=SIGNALS.length;
+if(SIGNALS.length>50){
+var last=document.querySelector('.signal-card:last-child');
+if(last)last.remove();
+SIGNALS.pop();
+}
+}
+function processNewCandle(candle){
+CANDLES.push(candle);
+if(CANDLES.length>500)CANDLES.shift();
+var signal=generateSignal(CANDLES);
+if(signal){
+addSignalToUI(signal);
+}
+if(SERIES){
+var data=CANDLES.map(function(c){return {time:c.time,open:c.open,high:c.high,low:c.low,close:c.close};});
+SERIES.setData(data);
+CHART.timeScale().fitContent();
+}
+CANDLE_COUNT.textContent=CANDLES.length;
+LAST_UPDATE.textContent=formatTime(Date.now());
+}
+function fetchHistorical(callback){
+var url='https://api.binance.com/api/v3/klines?symbol='+SYMBOL+'&interval='+INTERVAL+'&limit='+LIMIT;
+fetch(url).then(function(res){return res.json();}).then(function(data){
+var candles=[];
+for(var i=0;i<data.length;i++){
+var item=data[i];
+var time=Math.floor(item[0]/1000);
+candles.push({
+time:time,
+open:parseFloat(item[1]),
+high:parseFloat(item[2]),
+low:parseFloat(item[3]),
+close:parseFloat(item[4])
+});
+}
+callback(candles);
+}).catch(function(err){
+console.warn('REST API error, using fallback dummy data',err);
+var fallback=[];
+var base=Date.now()/1000 - 3600*LIMIT;
+for(var j=0;j<LIMIT;j++){
+var t=base+j*3600;
+var price=60000+Math.sin(j/10)*3000+Math.random()*500;
+fallback.push({time:t,open:price-100,high:price+200,low:price-300,close:price+50});
+}
+callback(fallback);
+});
+}
+function connectWebSocket(){
+if(WS){try{WS.close();}catch(e){}}
+var wsUrl='wss://stream.binance.com:9443/ws/'+SYMBOL.toLowerCase()+'@kline_'+INTERVAL;
+WS=new WebSocket(wsUrl);
+WS.onopen=function(){
+WS_STATUS.textContent='متصل';
+WS_STATUS.className='val on';
+};
+WS.onmessage=function(evt){
+try{
+var msg=JSON.parse(evt.data);
+if(msg.k && msg.k.x){ // شمعة مغلقة
+var k=msg.k;
+var time=Math.floor(k.t/1000);
+var candle={
+time:time,
+open:parseFloat(k.o),
+high:parseFloat(k.h),
+low:parseFloat(k.l),
+close:parseFloat(k.c)
+};
+processNewCandle(candle);
+}
+}catch(e){}
+};
+WS.onerror=function(){
+WS_STATUS.textContent='خطأ في WebSocket';
+WS_STATUS.className='val off';
+IS_WEBSOCKET=false;
+};
+WS.onclose=function(){
+if(IS_WEBSOCKET){
+WS_STATUS.textContent='غير متصل (إعادة محاولة...)';
+WS_STATUS.className='val off';
+setTimeout(function(){connectWebSocket();},5000);
+}
+};
+}
+function loadAndStart(){
+fetchHistorical(function(candles){
+CANDLES=candles.slice();
+if(!CHART_READY)initChart();
+var data=CANDLES.map(function(c){return {time:c.time,open:c.open,high:c.high,low:c.low,close:c.close};});
+SERIES.setData(data);
+CHART.timeScale().fitContent();
+CANDLE_COUNT.textContent=CANDLES.length;
+LAST_UPDATE.textContent=formatTime(Date.now());
+if(LOADING_EL)LOADING_EL.style.display='none';
+connectWebSocket();
+});
+}
+function resetApp(){
+if(WS){try{WS.close();}catch(e){}}
+SIGNALS_GRID.innerHTML='';
+NO_SIGNALS_EL.style.display='block';
+SIGNALS=[];
+LAST_SIGNAL_TIME=0;
+SIGNAL_COUNT.textContent='0';
+if(CHART){CHART.remove();CHART=null;SERIES=null;CHART_READY=false;}
+var container=document.getElementById('chart');
+container.innerHTML='<div id="loading-msg" class="loading">⏳ جاري إعادة التحميل...</div>';
+LOADING_EL=document.getElementById('loading-msg');
+setTimeout(function(){loadAndStart();},300);
+}
+RESET_BTN.addEventListener('click',resetApp);
+window.addEventListener('resize',function(){
+if(CHART){CHART.resize(document.getElementById('chart').clientWidth,document.getElementById('chart').clientHeight);}
+});
+// بدء التطبيق
+loadAndStart();
+</script>
+</body>
+</html>
