@@ -59,6 +59,8 @@ body{background:#0a0e17;color:#d0d8e6;padding:12px;direction:rtl;}
 .toast.sell{border-right-color:#f6465d;}
 .toast .toast-time{font-size:11px;color:#6a7b8e;margin-top:4px;}
 @keyframes slideIn{from{transform:translateX(100%);opacity:0;}to{transform:translateX(0);opacity:1;}}
+.copy-btn{background:#1f2c3a;border:none;color:#d0d8e6;padding:4px 14px;border-radius:20px;cursor:pointer;font-size:12px;transition:0.2s;margin-right:8px;}
+.copy-btn:hover{background:#2a3a4a;}
 </style>
 </head>
 <body>
@@ -86,7 +88,10 @@ body{background:#0a0e17;color:#d0d8e6;padding:12px;direction:rtl;}
 <div class="stat">📡 الحالة: <span id="ws-status" class="val on">متصل</span></div>
 <div class="stat">🕒 آخر تحديث: <span id="last-update" class="val">--</span></div>
 <div class="stat">📊 الإشارات: <span id="signal-count" class="val">0</span></div>
-<div class="stat"><button id="reset-btn" style="background:#1a2632;border:none;color:#b0c0d0;padding:2px 12px;border-radius:12px;cursor:pointer;">↻ إعادة تحميل</button></div>
+<div class="stat">
+<button id="reset-btn" style="background:#1a2632;border:none;color:#b0c0d0;padding:2px 12px;border-radius:12px;cursor:pointer;">↻ إعادة تحميل</button>
+<button id="copy-signals-btn" class="copy-btn">📋 نسخ الإشارات</button>
+</div>
 </div>
 <div id="chart-container"><div id="chart" style="width:100%;height:100%;"></div><div id="loading-msg" class="loading">⏳ جاري تحميل البيانات...</div></div>
 <div class="filter-bar"><button class="active" data-filter="all">الكل</button><button data-filter="buy">شراء</button><button data-filter="sell">بيع</button></div>
@@ -96,8 +101,7 @@ body{background:#0a0e17;color:#d0d8e6;padding:12px;direction:rtl;}
 <div id="toast-container"></div>
 <script>
 // ====================================================================
-// استراتيجية العين الثالثة (المستوى الثالث + الرابع) – نسخة عملية
-// تعتمد على: ADX (تصنيف النظم) + OBV (تدفق الأموال) + EMA + RSI + ATR
+// استراتيجية العين الثالثة – مع حل CORS باستخدام وكيل
 // ====================================================================
 var CHART=null,SERIES=null,CANDLES=[],SIGNALS=[];
 var WS=null,LAST_SIGNAL_TIME=0,SYMBOL='BTCUSDT',INTERVAL='1h',LIMIT=200;
@@ -113,43 +117,44 @@ var LIVE_PRICE=document.getElementById('live-price');
 var LIVE_CHANGE=document.getElementById('live-change');
 var REGIME_LABEL=document.getElementById('regime-label');
 var RESET_BTN=document.getElementById('reset-btn');
+var COPY_BTN=document.getElementById('copy-signals-btn');
 var PAIR_DISPLAY=document.getElementById('pair-display');
 var SYMBOL_SELECT=document.getElementById('symbol-select');
 var REST_INTERVAL=null;
 var TOAST_CONTAINER=document.getElementById('toast-container');
 var AUDIO_CTX=null;
+var IS_LOADING=true;
+
+// زر نسخ الإشارات
+COPY_BTN.addEventListener('click',function(){
+if(SIGNALS.length===0){showToast('⚠️ لا توجد إشارات لنسخها','');return;}
+var text='إشارات العين الثالثة ('+new Date().toLocaleString()+')\n';
+text+='==============================\n';
+SIGNALS.slice(0,20).forEach(function(s,idx){
+var label=s.action==='BUY'?'شراء':'بيع';
+text+=(idx+1)+'. '+label+' | '+formatTime(s.time)+'\n';
+text+='   الدخول: $'+s.entry.toFixed(2)+' | الهدف: $'+s.tp.toFixed(2)+' | وقف: $'+s.sl.toFixed(2)+'\n';
+text+='   '+s.analysis+'\n\n';
+});
+if(navigator.clipboard){
+navigator.clipboard.writeText(text).then(function(){
+showToast('📋 تم نسخ '+SIGNALS.length+' إشارة','');
+});
+}else{
+var ta=document.createElement('textarea');
+ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();
+showToast('📋 تم النسخ','');
+}
+});
 
 // تهيئة الصوت
-function initAudio(){
-if(!AUDIO_CTX){AUDIO_CTX=new (window.AudioContext||window.webkitAudioContext)();}
-}
-function playBeep(freq=800,dur=200){
-try{initAudio();var osc=AUDIO_CTX.createOscillator();var gain=AUDIO_CTX.createGain();osc.connect(gain);gain.connect(AUDIO_CTX.destination);osc.frequency.value=freq;osc.type='sine';gain.gain.value=0.3;osc.start();osc.stop(AUDIO_CTX.currentTime+dur/1000);}catch(e){}
-}
-function playAlert(type){
-if(type==='buy'){playBeep(1200,300);setTimeout(function(){playBeep(1500,200);},350);}
-else if(type==='sell'){playBeep(600,400);setTimeout(function(){playBeep(400,300);},450);}
-else{playBeep(1000,200);}
-}
+function initAudio(){if(!AUDIO_CTX){AUDIO_CTX=new (window.AudioContext||window.webkitAudioContext)();}}
+function playBeep(freq=800,dur=200){try{initAudio();var osc=AUDIO_CTX.createOscillator();var gain=AUDIO_CTX.createGain();osc.connect(gain);gain.connect(AUDIO_CTX.destination);osc.frequency.value=freq;osc.type='sine';gain.gain.value=0.3;osc.start();osc.stop(AUDIO_CTX.currentTime+dur/1000);}catch(e){}}
+function playAlert(type){if(type==='buy'){playBeep(1200,300);setTimeout(function(){playBeep(1500,200);},350);}else if(type==='sell'){playBeep(600,400);setTimeout(function(){playBeep(400,300);},450);}else{playBeep(1000,200);}}
 
-// إشعارات المتصفح
-function showBrowserNotification(title,body){
-if(!('Notification' in window))return;
-if(Notification.permission==='granted'){
-new Notification(title,{body:body,icon:'https://cryptologos.cc/logos/bitcoin-btc-logo.png'});
-}else if(Notification.permission!=='denied'){
-Notification.requestPermission().then(function(perm){if(perm==='granted'){new Notification(title,{body:body,icon:'https://cryptologos.cc/logos/bitcoin-btc-logo.png'});}});
-}
-}
+function showBrowserNotification(title,body){if(!('Notification' in window))return;if(Notification.permission==='granted'){new Notification(title,{body:body,icon:'https://cryptologos.cc/logos/bitcoin-btc-logo.png'});}else if(Notification.permission!=='denied'){Notification.requestPermission().then(function(perm){if(perm==='granted'){new Notification(title,{body:body,icon:'https://cryptologos.cc/logos/bitcoin-btc-logo.png'});}});}}
 
-// Toast (تنبيه داخل المتصفح)
-function showToast(message,type){
-var toast=document.createElement('div');
-toast.className='toast'+(type?' '+type:'');
-toast.innerHTML=message+'<div class="toast-time">'+formatTime(Date.now())+'</div>';
-TOAST_CONTAINER.prepend(toast);
-setTimeout(function(){if(toast.parentNode)toast.remove();},10000);
-}
+function showToast(message,type){var toast=document.createElement('div');toast.className='toast'+(type?' '+type:'');toast.innerHTML=message+'<div class="toast-time">'+formatTime(Date.now())+'</div>';TOAST_CONTAINER.prepend(toast);setTimeout(function(){if(toast.parentNode)toast.remove();},10000);}
 
 function initChart(){
 var container=document.getElementById('chart');
@@ -249,12 +254,10 @@ SIGNALS_GRID.prepend(card);
 SIGNALS.push(signal);
 SIGNAL_COUNT.textContent=SIGNALS.length;
 if(SIGNALS.length>30){var last=document.querySelector('.signal-card:last-child');if(last)last.remove();SIGNALS.pop();}
-// تنبيهات
 var msg=label+' على '+SYMBOL+' عند $'+signal.entry.toFixed(2)+' | الهدف: $'+signal.tp.toFixed(2)+' | وقف: $'+signal.sl.toFixed(2);
 showToast(msg,signal.action==='BUY'?'buy':'sell');
 playAlert(signal.action==='BUY'?'buy':'sell');
 showBrowserNotification('🔔 إشارة '+label, msg);
-// ربط الأزرار بعد الإضافة
 card.querySelectorAll('.btn-buy,.btn-sell').forEach(function(btn){
 btn.addEventListener('click',function(e){
 var act=this.dataset.action;
@@ -292,10 +295,26 @@ LAST_UPDATE.textContent=formatTime(Date.now());
 }
 function fetchHistorical(callback){
 var url='https://api.binance.com/api/v3/klines?symbol='+SYMBOL+'&interval='+INTERVAL+'&limit='+LIMIT;
+// استخدام وكيل CORS لتجاوز حظر السياسة
+var proxy='https://api.allorigins.win/raw?url=';
+fetch(proxy+encodeURIComponent(url))
+.then(function(r){if(!r.ok)throw new Error('Network response was not ok');return r.json();})
+.then(function(data){
+var candles=[];for(var i=0;i<data.length;i++){var item=data[i];candles.push({time:Math.floor(item[0]/1000),open:parseFloat(item[1]),high:parseFloat(item[2]),low:parseFloat(item[3]),close:parseFloat(item[4]),volume:parseFloat(item[5])});}
+callback(candles);
+}).catch(function(err){
+console.warn('Proxy error, trying fallback',err);
+// محاولة مباشرة (لن تعمل إلا إذا كان المستخدم يستخدم خادم وسيط)
 fetch(url).then(function(r){return r.json();}).then(function(data){
 var candles=[];for(var i=0;i<data.length;i++){var item=data[i];candles.push({time:Math.floor(item[0]/1000),open:parseFloat(item[1]),high:parseFloat(item[2]),low:parseFloat(item[3]),close:parseFloat(item[4]),volume:parseFloat(item[5])});}
 callback(candles);
-}).catch(function(err){console.warn('REST fallback',err);var fallback=[];var base=Date.now()/1000-3600*LIMIT;for(var j=0;j<LIMIT;j++){var t=base+j*3600;var p=60000+Math.sin(j/10)*3000+Math.random()*500;fallback.push({time:t,open:p-100,high:p+200,low:p-300,close:p+50,volume:Math.random()*100});}callback(fallback);});
+}).catch(function(err2){
+console.warn('Direct fetch also failed, using dummy data',err2);
+var fallback=[];var base=Date.now()/1000-3600*LIMIT;for(var j=0;j<LIMIT;j++){var t=base+j*3600;var p=65000+Math.sin(j/5)*5000+Math.random()*1000;fallback.push({time:t,open:p-200,high:p+300,low:p-400,close:p+100,volume:Math.random()*200});}
+showToast('⚠️ استخدمنا بيانات بديلة (غير حقيقية) بسبب فشل الاتصال','');
+callback(fallback);
+});
+});
 }
 function connectWebSocket(){
 if(WS){try{WS.close();}catch(e){}}
@@ -318,15 +337,22 @@ processNewCandle(last);
 },60000);
 }
 function loadAndStart(){
-fetchHistorical(function(candles){CANDLES=candles.slice();if(!CHART_READY)initChart();var data=CANDLES.map(function(c){return {time:c.time,open:c.open,high:c.high,low:c.low,close:c.close};});SERIES.setData(data);CHART.timeScale().fitContent();LAST_UPDATE.textContent=formatTime(Date.now());if(LOADING_EL)LOADING_EL.style.display='none';connectWebSocket();startRESTFallback();});
+IS_LOADING=true;
+fetchHistorical(function(candles){
+CANDLES=candles.slice();
+if(!CHART_READY)initChart();
+var data=CANDLES.map(function(c){return {time:c.time,open:c.open,high:c.high,low:c.low,close:c.close};});
+SERIES.setData(data);
+CHART.timeScale().fitContent();
+LAST_UPDATE.textContent=formatTime(Date.now());
+if(LOADING_EL)LOADING_EL.style.display='none';
+IS_LOADING=false;
+connectWebSocket();
+startRESTFallback();
+});
 }
 function resetApp(){if(WS){try{WS.close();}catch(e){}}if(REST_INTERVAL)clearInterval(REST_INTERVAL);SIGNALS_GRID.innerHTML='';NO_SIGNALS_EL.style.display='block';SIGNALS=[];LAST_SIGNAL_TIME=0;SIGNAL_COUNT.textContent='0';if(CHART){CHART.remove();CHART=null;SERIES=null;CHART_READY=false;}var container=document.getElementById('chart');container.innerHTML='<div id="loading-msg" class="loading">⏳ جاري إعادة التحميل...</div>';LOADING_EL=document.getElementById('loading-msg');setTimeout(loadAndStart,300);}
-function changeSymbol(){
-var val=SYMBOL_SELECT.value;
-SYMBOL=val;
-PAIR_DISPLAY.textContent=val.replace('USDT','/USDT');
-resetApp();
-}
+function changeSymbol(){var val=SYMBOL_SELECT.value;SYMBOL=val;PAIR_DISPLAY.textContent=val.replace('USDT','/USDT');resetApp();}
 SYMBOL_SELECT.addEventListener('change',changeSymbol);
 RESET_BTN.addEventListener('click',resetApp);
 window.addEventListener('resize',function(){if(CHART){CHART.resize(document.getElementById('chart').clientWidth,document.getElementById('chart').clientHeight);}});
@@ -343,7 +369,6 @@ else{card.style.display='none';}
 });
 });
 });
-// طلب إذن الإشعارات
 if('Notification' in window && Notification.permission==='default'){Notification.requestPermission();}
 loadAndStart();
 </script>
